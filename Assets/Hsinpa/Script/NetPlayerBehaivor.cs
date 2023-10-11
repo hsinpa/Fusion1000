@@ -4,69 +4,65 @@ using UnityEngine;
 using Fusion;
 using Inputs;
 using UnityEngine.InputSystem;
+using Hsinpa.UnityController;
 
 namespace Hsinpa.Nettwork {
     public class NetPlayerBehaivor : SimulationBehaviour
     {
         [SerializeField]
-        private CharacterController m_characterController;
+        private CustomPersonController m_characterController;
 
         [SerializeField]
-        private float m_speed = 1;
+        private PlayerInput m_playerInput;
 
-        private CharacterAction m_characterAction;
+        [SerializeField]
+        private Animator m_animator;
 
-        private Vector3 m_inputAxis;
+        [SerializeField]
+        private CharacterController m_characterCtrl;
+
+        [SerializeField]
+        private SkinnedMeshRenderer m_skinMesh;
+        public SkinnedMeshRenderer SkinMesh => m_skinMesh;
+
+        [SerializeField]
+        private NetworkObject m_netObject;
+
+        private int m_id;
+        public int ID => m_id;
 
         void Start()
         {
             Debug.Log("NetPlayerBehaivor " + Object.HasStateAuthority);
+
+            m_id = m_netObject.Id.GetHashCode();
+
             if (!Object.HasStateAuthority) {
+                CharacterLODManager.Instance.Register(m_id, this);
                 this.enabled = false;
                 return;
             }
+            m_characterController.SetUp(Camera.main);
 
-            m_inputAxis = new Vector2();
-            m_characterAction = new CharacterAction();
-            m_characterAction.Enable();
-            m_characterAction.Movement.Down.started += OnDownEvent;
-            m_characterAction.Movement.Top.started += OnTopEvent;
-            m_characterAction.Movement.Right.started += OnRightEvent;
-            m_characterAction.Movement.Left.started += OnLeftEvent;
-
-            m_characterAction.Movement.Down.canceled += OnTopEvent;
-            m_characterAction.Movement.Top.canceled += OnDownEvent;
-            m_characterAction.Movement.Right.canceled += OnLeftEvent;
-            m_characterAction.Movement.Left.canceled += OnRightEvent;
+            m_playerInput.enabled = true;
+            m_characterController.enabled = true;
         }
 
         public override void FixedUpdateNetwork() {
-            if (!Object.HasStateAuthority || m_characterController == null) return;
+            if (!Object.HasStateAuthority || !m_characterController.enabled) return;
 
-            PerformMove(m_inputAxis);
+            m_characterController.OnUpdate();
         }
 
-        private void PerformMove(Vector3 p_vector) {
-            m_characterController.Move(p_vector * Time.deltaTime * m_speed);
+        public void SetObjectVisible(bool is_visible) {
+            m_animator.enabled = is_visible;
+            m_characterCtrl.enabled = is_visible;
+            m_skinMesh.enabled = is_visible;
         }
 
-        private void OnDownEvent(InputAction.CallbackContext callbackCtx) {
-            m_inputAxis.z -= 1;
-        }
-
-        private void OnTopEvent(InputAction.CallbackContext callbackCtx)
+        private void OnDestroy()
         {
-            m_inputAxis.z += 1;
-        }
-
-        private void OnRightEvent(InputAction.CallbackContext callbackCtx)
-        {
-            m_inputAxis.x += 1;
-        }
-
-        private void OnLeftEvent(InputAction.CallbackContext callbackCtx)
-        {
-            m_inputAxis.x -= 1;
+            CharacterLODManager.Instance.Remove(m_id);
         }
 
         [Rpc]

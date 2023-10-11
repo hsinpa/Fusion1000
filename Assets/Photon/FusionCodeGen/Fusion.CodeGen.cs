@@ -265,6 +265,15 @@ namespace Fusion.CodeGen {
         readMethod.AddAttribute<MethodImplAttribute, MethodImplOptions>(asm, MethodImplOptions.AggressiveInlining);
         readMethod.AddTo(readerWriterType);
 
+        var readRefMethod = new MethodDefinition($"{namePrefix}ReadRef",
+          visibility | MethodAttributes.Final | MethodAttributes.HideBySig | MethodAttributes.NewSlot | MethodAttributes.Virtual,
+          elementType.MakeByReferenceType());
+
+        readRefMethod.Parameters.Add(new ParameterDefinition("data", ParameterAttributes.None, dataType));
+        readRefMethod.Parameters.Add(new ParameterDefinition("index", ParameterAttributes.None, indexType));
+        readRefMethod.AddAttribute<MethodImplAttribute, MethodImplOptions>(asm, MethodImplOptions.AggressiveInlining);
+        readRefMethod.AddTo(readerWriterType);
+
         var writeMethod = new MethodDefinition($"{namePrefix}Write",
           visibility | MethodAttributes.Final | MethodAttributes.HideBySig | MethodAttributes.NewSlot | MethodAttributes.Virtual,
           asm.Void);
@@ -283,13 +292,11 @@ namespace Fusion.CodeGen {
 
         if (isExplicit) {
           readMethod.Overrides.Add(interfaceType.GetGenericInstanceMethodOrThrow(nameof(IElementReaderWriter<int>.Read)));
+          readRefMethod.Overrides.Add(interfaceType.GetGenericInstanceMethodOrThrow(nameof(IElementReaderWriter<int>.ReadRef)));
           writeMethod.Overrides.Add(interfaceType.GetGenericInstanceMethodOrThrow(nameof(IElementReaderWriter<int>.Write)));
           getElementWordCountMethod.Overrides.Add(interfaceType.GetGenericInstanceMethodOrThrow(nameof(IElementReaderWriter<int>.GetElementWordCount)));
         }
 
-
-        var getterMethodIL = readMethod.Body.GetILProcessor();
-        var setterMethodIL = writeMethod.Body.GetILProcessor();
 
         Action<ILProcessor> addressGetter = il => {
           il.Append(Instruction.Create(OpCodes.Ldarg_1));
@@ -299,8 +306,9 @@ namespace Fusion.CodeGen {
           il.Append(Instruction.Create(OpCodes.Add));
         };
 
-        EmitRead(asm, getterMethodIL, elementType, readerWriterType, member, addressGetter, emitRet: true);
-        EmitWrite(asm, setterMethodIL, elementType, readerWriterType, member, addressGetter, OpCodes.Ldarg_3, emitRet: true);
+        EmitRead(asm, readMethod.Body.GetILProcessor(), elementType, readerWriterType, member, addressGetter, emitRet: true);
+        EmitRead(asm, readRefMethod.Body.GetILProcessor(), readRefMethod.ReturnType, readerWriterType, member, addressGetter, emitRet: true, throwForNonUnmanagedRefs: true);
+        EmitWrite(asm, writeMethod.Body.GetILProcessor(), elementType, readerWriterType, member, addressGetter, OpCodes.Ldarg_3, emitRet: true);
 
         getElementWordCountMethod.AddTo(readerWriterType);
         {
@@ -481,11 +489,18 @@ namespace Fusion.CodeGen {
       EmitRead(asm, il, property.PropertyType, property.DeclaringType, property, addressGetter, true);
     }
 
-    void EmitRead(ILWeaverAssembly asm, ILProcessor il, TypeReference type, TypeReference declaringType, ICustomAttributeProvider member, Action<ILProcessor> addressGetter, bool emitRet = false) {
+    void EmitRead(ILWeaverAssembly asm, ILProcessor il, TypeReference type, TypeReference declaringType, ICustomAttributeProvider member, Action<ILProcessor> addressGetter, bool emitRet = false, bool throwForNonUnmanagedRefs = false) {
       // for pointer types we can simply just return the address we loaded on the stack
       if (type.IsPointer || type.IsByReference) {
         // load address
-        addressGetter(il);
+        if (throwForNonUnmanagedRefs == false || TypeRegistry.GetInfo(type.GetElementTypeWithGenerics()).IsTriviallyCopyable(member)) {
+          addressGetter(il);
+        } else {
+          il.Append(Ldstr($"Only supported for trivially copyable types. {type.GetElementTypeWithGenerics()} is not trivially copyable."));
+          il.Append(Newobj(asm.Import(typeof(NotSupportedException).GetConstructor(new[] { typeof(string) }))));
+          il.Append(Throw());
+          return;
+        }
       } else {
         using (var ctx = new MethodContext(asm, il.Body.Method, addressGetter: addressGetter)) {
           ctx.LoadElementReaderWriterImpl = (il, type, member) => {
@@ -702,33 +717,23 @@ namespace Fusion.CodeGen {
       }
     }
 
+    MethodReference GetBaseMethodReference(ILWeaverAssembly asm, MethodDefinition overridingDefinition, TypeReference baseType) {
 
+      var baseMethod = new MethodReference(overridingDefinition.Name, overridingDefinition.ReturnType, baseType) {
+        HasThis = overridingDefinition.HasThis,
+        ExplicitThis = overridingDefinition.ExplicitThis,
+        CallingConvention = overridingDefinition.CallingConvention,
+      };
 
-    
-
-    MethodReference FindMethodInParent(ILWeaverAssembly asm, TypeDefinition type, string name, string stopAtType = null, int? argCount = null) {
-
-      TypeReference typeRef = type.BaseType;
-      type = typeRef.Resolve();
-      
-      while (type != null) {
-        if (type.Name == stopAtType || type.FullName == "System.Object") {
-          return null;
-        }
-
-        MethodReference method = type.Methods.FirstOrDefault(x => x.Name == name && ((argCount == null) || (x.Parameters.Count == argCount.Value)));
-        if (method != null) {
-          if (typeRef is GenericInstanceType genericTypeRef) {
-            method = method.GetCallable(genericTypeRef);
-          }
-          return asm.CecilAssembly.MainModule.ImportReference(method);
-        }
-
-        typeRef = type.BaseType;
-        type = typeRef.Resolve();
+      foreach (var parameter in overridingDefinition.Parameters) {
+        baseMethod.Parameters.Add(new ParameterDefinition(parameter.ParameterType));
       }
 
-      return null;
+      if (baseMethod.DeclaringType is GenericInstanceType genericTypeRef) {
+        baseMethod = baseMethod.GetCallable(genericTypeRef);
+      }
+
+      return asm.Import(baseMethod);
     }
 
     string InvokerMethodName(string method, Dictionary<string, int> nameCache) {
@@ -860,21 +865,11 @@ namespace Fusion.CodeGen {
             ins.Add(Initobj(ctx.RpcInvokeInfoVariable.VariableType));
 
             // fix each ret
-            var instructions = il.Body.Instructions;
-            for (int i = 0; i < instructions.Count; ++i) {
-              var instruction = instructions[i];
-              if (instruction.OpCode == OpCodes.Ret) {
-                if (instructions[i - 1].IsLdlocWithIndex(out _)) {
-                  // replace indexed load
-                  instructions[i - 1].OpCode = OpCodes.Ldloc;
-                  instructions[i - 1].Operand = ctx.RpcInvokeInfoVariable;
-                } else if (instructions[i - 1].OpCode == OpCodes.Ldloc) {
-                  // replace named load
-                  instructions[i - 1].Operand = ctx.RpcInvokeInfoVariable;
-                } else {
-                  throw new ILWeaverException($"{rpc}: return pattern of {nameof(RpcInvokeInfo)} not recognised at {instruction}. Context: {string.Join("\n", instructions)}");
-                }
-              }
+            var returns = il.Body.Instructions.Where(x => x.OpCode == OpCodes.Ret).ToList();
+            foreach (var retInstruction in returns) {
+              // need to pop the original value and load our new one
+              il.InsertBefore(retInstruction, Pop());
+              il.InsertBefore(retInstruction, Ldloc(ctx.RpcInvokeInfoVariable));
             }
           }
 
@@ -968,9 +963,13 @@ namespace Fusion.CodeGen {
               var done = Nop();
               il.Append(Ldc_I4((int)RpcTargetStatus.Unreachable));
               il.Append(Bne_Un_S(done));
-              il.Append(Ldarg(rpcTargetParameter));
-              il.Append(Ldstr(rpc.ToString()));
-              il.Append(Call(asm.NetworkBehaviourUtils.GetMethod(nameof(NetworkBehaviourUtils.NotifyRpcTargetUnreachable))));
+
+              if (!returnsRpcInvokeInfo) {
+                il.Append(Ldarg(rpcTargetParameter));
+                il.Append(Ldstr(rpc.ToString()));
+                il.Append(Call(asm.NetworkBehaviourUtils.GetMethod(nameof(NetworkBehaviourUtils.NotifyRpcTargetUnreachable))));
+              }
+
               il.Append(Pop()); // pop the GetRpcTargetStatus
 
               il.AppendMacro(ctx.SetRpcInvokeInfoStatus(invokeLocal, RpcLocalInvokeResult.TagetPlayerIsNotLocal));
@@ -993,8 +992,8 @@ namespace Fusion.CodeGen {
                 // will never get called
                 var checkDone = Nop();
                 il.Append(Bne_Un_S(checkDone));
-
-                if (NetworkRunner.BuildType == NetworkRunner.BuildTypes.Debug) {
+                
+                if (!returnsRpcInvokeInfo && NetworkRunner.BuildType == NetworkRunner.BuildTypes.Debug) {
                   il.Append(Ldarg(rpcTargetParameter));
                   il.Append(Ldstr(rpc.ToString()));
                   il.Append(Call(asm.NetworkBehaviourUtils.GetMethod(nameof(NetworkBehaviourUtils.NotifyLocalTargetedRpcCulled))));
@@ -1017,12 +1016,14 @@ namespace Fusion.CodeGen {
             il.Append(And());
             il.Append(Brtrue_S(checkDone));
 
-            // source is not valid, notify
-            il.Append(Ldstr(rpc.ToString()));
-            il.Append(Ldarg_0());
-            il.Append(Ldfld(asm.NetworkedBehaviour.GetField(nameof(NetworkBehaviour.Object))));
-            il.Append(Ldc_I4(sources));
-            il.Append(Call(asm.NetworkBehaviourUtils.GetMethod(nameof(NetworkBehaviourUtils.NotifyLocalSimulationNotAllowedToSendRpc))));
+            if (!returnsRpcInvokeInfo) {
+              // source is not valid, notify
+              il.Append(Ldstr(rpc.ToString()));
+              il.Append(Ldarg_0());
+              il.Append(Ldfld(asm.NetworkedBehaviour.GetField(nameof(NetworkBehaviour.Object))));
+              il.Append(Ldc_I4(sources));
+              il.Append(Call(asm.NetworkBehaviourUtils.GetMethod(nameof(NetworkBehaviourUtils.NotifyLocalSimulationNotAllowedToSendRpc))));
+            }
 
             il.AppendMacro(ctx.SetRpcInvokeInfoStatus(invokeLocal, RpcLocalInvokeResult.InsufficientSourceAuthority));
             il.AppendMacro(ctx.SetRpcInvokeInfoStatus(RpcSendCullResult.InsufficientSourceAuthority));
@@ -1546,12 +1547,11 @@ namespace Fusion.CodeGen {
       WeaveRpcs(asm, type, allowInstanceRpcs: false);
     }
 
-    private static bool IsFieldStoreOp(Instruction instruction, FieldDefinition field, TypeReference declaringType) {
-      if (instruction.OpCode != OpCodes.Stfld) {
+    public static bool IsFieldOperand(Instruction instruction, FieldDefinition field, TypeReference declaringType) {
+      var storeField = instruction.Operand as FieldReference;
+      if (storeField == null) {
         return false;
       }
-
-      var storeField = (FieldReference)instruction.Operand;
       if (storeField == field) {
         return true;
       }
@@ -1570,17 +1570,18 @@ namespace Fusion.CodeGen {
       }
 
       var instructions = constructor.Body.Instructions;
-      int prevStfld = -1;
+
+      int ldarg0Index = 0;
       for (int i = 0; i < instructions.Count; ++i) {
         var instruction = instructions[i];
-        if (instruction.OpCode == OpCodes.Stfld) {
-          // found the store
-          if (IsFieldStoreOp(instruction, field, declaringType)) {
-            int start = prevStfld + 1;
-            return instructions.Skip(start).Take(i - start + 1).ToArray();
-          } else {
-            prevStfld = i;
-          }
+        if (instruction.OpCode == OpCodes.Ldarg_0) {
+          ldarg0Index = i;
+        } else if (instruction.OpCode == OpCodes.Stfld && IsFieldOperand(instruction, field, declaringType)) {
+          // regular init
+          return instructions.Skip(ldarg0Index).Take(i - ldarg0Index + 1).ToArray();
+        } else if (instruction.OpCode == OpCodes.Initobj && instruction.Previous?.OpCode == OpCodes.Ldflda && IsFieldOperand(instruction.Previous, field, declaringType)) {
+          // init with default constructor
+          return instructions.Skip(ldarg0Index).Take(i - ldarg0Index + 1).ToArray();
         } else if (instruction.IsBaseConstructorCall(constructor.DeclaringType)) {
           // base constructor init
           break;
@@ -1657,7 +1658,7 @@ namespace Fusion.CodeGen {
           CheckIfMakeInitializerImplicitCast(instruction);
           nextImplicitCast = false;
           il.Remove(instruction);
-        } else if (IsFieldStoreOp(instruction, backingField, field.DeclaringType)) {
+        } else if (IsFieldOperand(instruction, backingField, field.DeclaringType)) {
           instruction.Operand = field;
         } else if (IsMakeInitializerCall(instruction)) {
           // dictionaries need one extra step, if using SerializableDictionary :(
@@ -1835,6 +1836,12 @@ namespace Fusion.CodeGen {
     }
 
     public bool WeaveInput(ILWeaverAssembly asm, TypeReference typeRef) {
+      ILWeaverException.DebugThrowIf(!typeRef.Is<INetworkInput>(), $"Not a {nameof(INetworkInput)}");
+
+
+      if (typeRef.Module != asm.CecilAssembly.MainModule) {
+        throw new ILWeaverException($"Type {typeRef} is not in the main module of assembly {asm.CecilAssembly}");
+      }
 
       var type = typeRef.Resolve();
       if (type.TryGetAttribute<NetworkStructWeavedAttribute>(out _)) {
@@ -1852,6 +1859,10 @@ namespace Fusion.CodeGen {
 
     public bool WeaveStruct(ILWeaverAssembly asm, TypeReference typeRef) {
       ILWeaverException.DebugThrowIf(!typeRef.Is<INetworkStruct>(), $"Not a {nameof(INetworkStruct)}");
+
+      if (typeRef.Module != asm.CecilAssembly.MainModule) {
+        throw new ILWeaverException($"Type {typeRef} is not in the main module of assembly {asm.CecilAssembly}");
+      }
 
       var type = typeRef.Resolve();
       if (type.TryGetAttribute<NetworkStructWeavedAttribute>(out _)) {
@@ -2122,12 +2133,42 @@ namespace Fusion.CodeGen {
       }
     }
 
+    public int GetBehaviourWordCount(ILWeaverAssembly asm, TypeDefinition type) {
+      int wordCount = 0;
+      while (!type.IsSame<NetworkBehaviour>()) {
+
+        if (type.TryGetAttribute<NetworkBehaviourWeavedAttribute>(out var weavedAttribute)) {
+          var result = weavedAttribute.GetAttributeArgument<int>(0);
+          if (result > 0) {
+            wordCount += result;
+          }
+          break;
+        }
+
+        foreach (var property in type.Properties) {
+          if (!IsWeavableProperty(property, out var propertyInfo)) {
+            continue;
+          }
+
+          wordCount += TypeRegistry.GetPropertyWordCount(property);
+        }
+
+        type = type.BaseType.Resolve();
+      }
+
+      return wordCount;
+    }
+
     public int WeaveBehaviour(ILWeaverAssembly asm, TypeDefinition type) {
       if (type.IsSame<NetworkBehaviour>()) {
         return 0;
       }
 
       ILWeaverException.DebugThrowIf(!type.IsSubclassOf<NetworkBehaviour>(), $"Not a {nameof(NetworkBehaviour)}");
+
+      if (type.Module != asm.CecilAssembly.MainModule) {
+        throw new ILWeaverException($"Type {type} is not in the main module of assembly {asm.CecilAssembly}");
+      }
 
       if (type.TryGetAttribute<NetworkBehaviourWeavedAttribute>(out var weavedAttribute)) {
         var result = weavedAttribute.GetAttributeArgument<int>(0);
@@ -2152,23 +2193,42 @@ namespace Fusion.CodeGen {
         type.Fields.Add(new FieldDefinition("$IL2CPP_NETWORK_BEHAVIOUR_CALLBACKS", FieldAttributes.Static, networkBehaviourCallbacks));
 
         // get block count of parent as starting point for ourselves
-        var wordCount = WeaveBehaviour(asm, type.BaseType.Resolve());
+        var wordCount = GetBehaviourWordCount(asm, type.BaseType.Resolve());
 
         // this is the data field which holds this behaviours root pointer
         var dataField = asm.NetworkedBehaviour.GetField(nameof(NetworkBehaviour.Ptr));
 
         // find onspawned method
         Func<string, (MethodDefinition, Instruction)> createOverride = (name) => {
+
+          var rootMethod = asm.NetworkedBehaviour.GetMethod(name);
+
           var result = type.Methods.FirstOrDefault(x => x.Name == name);
           if (result != null) {
             // need to find the placeholder method
             var placeholderMethodName = asm.NetworkedBehaviour.GetMethod(nameof(NetworkBehaviour.InvokeWeavedCode)).FullName;
             var placeholders = result.Body.Instructions
-              .Where(x => x.OpCode == OpCodes.Call && x.Operand is MethodReference && ((MethodReference)x.Operand).FullName == placeholderMethodName)
-              .ToArray();
-
-            if (placeholders.Length != 1) {
+             .Where(x => x.OpCode == OpCodes.Call && (x.Operand as MethodReference)?.FullName == placeholderMethodName)
+             .ToList();
+            
+            if (placeholders.Count != 1) {
               throw new ILWeaverException($"When overriding {name} in a type with [Networked] properties, make sure to call {placeholderMethodName} exactly once somewhere.");
+            }
+            
+            var baseCalls = result.Body.Instructions
+             .Where(x => x.OpCode == OpCodes.Call && (x.Operand as MethodReference)?.Name == name)
+             .ToList();
+
+            if (baseCalls.Count == 0 && !type.BaseType.IsSame<NetworkBehaviour>()) {
+              throw new ILWeaverException($"When overriding {name} in a type derived from a type derived from {nameof(NetworkBehaviour)}, invoke the base method.");
+            }
+            
+            foreach (var baseCall in baseCalls) {
+              var baseMethod = (MethodReference)baseCall.Operand;
+              if (!baseMethod.DeclaringType.IsSame(type.BaseType)) {
+                Log.Debug($"Changing base declaring type from {baseMethod.DeclaringType} to {type.BaseType}");
+                baseCall.Operand = GetBaseMethodReference(asm, result, type.BaseType);
+              }
             }
 
             var placeholder = placeholders[0];
@@ -2185,42 +2245,40 @@ namespace Fusion.CodeGen {
             return (result, Br(returnTarget));
           }
 
-          result = new MethodDefinition(name, MethodAttributes.Public, asm.CecilAssembly.MainModule.ImportReference(typeof(void))) {
+          result = new MethodDefinition(name, MethodAttributes.Public, rootMethod.ReturnType) {
             IsVirtual = true,
             IsHideBySig = true,
             IsReuseSlot = true
           };
 
-          var baseMethod = FindMethodInParent(asm, type, name, nameof(SimulationBehaviour));
-
-          // call base method
-          if (baseMethod != null) {
-            if (baseMethod.DeclaringType.IsSame<NetworkBehaviour>()) {
-              // don't call base method
-              foreach (var parameter in baseMethod.Parameters) {
-                result.Parameters.Add(new ParameterDefinition(parameter.ParameterType));
-              }
-            } else {
-              var bodyIL = result.Body.GetILProcessor();
-
-              bodyIL.Append(Instruction.Create(OpCodes.Ldarg_0));
-
-              foreach (var parameter in baseMethod.Parameters) {
-                var p = new ParameterDefinition(parameter.ParameterType);
-                result.Parameters.Add(p);
-                bodyIL.Append(Ldarg(p));
-              }
-
-              bodyIL.Append(Call(baseMethod));
-            }
+          foreach (var parameter in rootMethod.Parameters) {
+            result.Parameters.Add(new ParameterDefinition(parameter.ParameterType));
           }
 
           type.Methods.Add(result);
+
+          // call base method if it exists, unless it is a NB
+          var baseType = type.BaseType;
+          while (!baseType.IsSame<NetworkBehaviour>()) {
+            
+            var baseMethod = GetBaseMethodReference(asm, result, baseType);
+            var bodyIL     = result.Body.GetILProcessor();
+
+            bodyIL.Append(Instruction.Create(OpCodes.Ldarg_0));
+
+            foreach (var parameter in result.Parameters) {
+              bodyIL.Append(Ldarg(parameter));
+            }
+
+            bodyIL.Append(Call(baseMethod));
+            break;
+          }
+          
           return (result, Ret());
         };
 
-        var setDefaults = new Lazy<(MethodDefinition, Instruction)>(() => createOverride(nameof(NetworkBehaviour.CopyBackingFieldsToState)));
-        var getDefaults = new Lazy<(MethodDefinition, Instruction)>(() => createOverride(nameof(NetworkBehaviour.CopyStateToBackingFields)));
+        var setDefaults = createOverride(nameof(NetworkBehaviour.CopyBackingFieldsToState));
+        var getDefaults = createOverride(nameof(NetworkBehaviour.CopyStateToBackingFields));
 
         FieldDefinition lastAddedFieldWithKnownPosition = null;
         List<FieldDefinition> fieldsWithUncertainPosition = new List<FieldDefinition>();
@@ -2323,7 +2381,7 @@ namespace Fusion.CodeGen {
 
               if (fieldInit?.Any() == true) {
                 // need to patch defaults with this, but only during the initial set
-                var il = setDefaults.Value.Item1.Body.GetILProcessor();
+                var il = setDefaults.Item1.Body.GetILProcessor();
                 var postInit = Nop();
                 il.Append(Ldarg_1());
                 il.Append(Brfalse(postInit));
@@ -2355,7 +2413,7 @@ namespace Fusion.CodeGen {
                   } else if (skipImplicitInitializerCast) {
                     skipImplicitInitializerCast = false;
                     CheckIfMakeInitializerImplicitCast(instruction);
-                  } else if (IsFieldStoreOp(instruction, propertyInfo.BackingField, type)) {
+                  } else if (instruction.OpCode == OpCodes.Stfld && IsFieldOperand(instruction, propertyInfo.BackingField, type)) {
                     // arrays and dictionaries don't have setters
                     if (property.PropertyType.IsPointer || property.PropertyType.IsByReference) {
                       il.Append(Stind_or_Stobj(property.PropertyType.GetElementTypeWithGenerics()));
@@ -2488,7 +2546,7 @@ namespace Fusion.CodeGen {
               
 
               {
-                var il = setDefaults.Value.Item1.Body.GetILProcessor();
+                var il = setDefaults.Item1.Body.GetILProcessor();
 
                 if (property.PropertyType.IsByReference || property.PropertyType.IsPointer) {
                   il.Append(Ldarg_0());
@@ -2546,7 +2604,7 @@ namespace Fusion.CodeGen {
               }
 
               {
-                var il = getDefaults.Value.Item1.Body.GetILProcessor();
+                var il = getDefaults.Item1.Body.GetILProcessor();
 
                 if (property.PropertyType.IsByReference || property.PropertyType.IsPointer) {
                   il.Append(Ldarg_0());
@@ -2603,13 +2661,18 @@ namespace Fusion.CodeGen {
           }
         }
 
-        if (setDefaults.IsValueCreated) {
-          var (method, instruction) = setDefaults.Value;
+        {
+          var (method, instruction) = setDefaults;
           method.Body.GetILProcessor().Append(instruction);
         }
-        if (getDefaults.IsValueCreated) {
-          var (method, instruction) = getDefaults.Value;
+        
+        {
+          var (method, instruction) = getDefaults;
           method.Body.GetILProcessor().Append(instruction);
+        }
+
+        if (wordCount != GetBehaviourWordCount(asm, type)) {
+          throw new ILWeaverException($"Failed to weave {type} - word count mismatch {wordCount} vs {GetBehaviourWordCount(asm, type)}");
         }
 
         // add meta attribute
@@ -2640,6 +2703,9 @@ namespace Fusion.CodeGen {
               }
               var behaviourType = ((GenericInstanceType)parameterType).GenericArguments[0];
               if (!property.DeclaringType.Is(behaviourType)) {
+                if (behaviourType.IsGenericInstance) {
+                  return property.DeclaringType.Is(behaviourType.Resolve());
+                }
                 return false;
               }
               return true;
@@ -2869,11 +2935,11 @@ namespace Fusion.CodeGen {
     }
   }
 
-  public class ILWeaverAssembly {
+  public class ILWeaverAssembly : IDisposable {
     public bool         Modified;
-    public List<String> Errors = new List<string>();
 
     public AssemblyDefinition CecilAssembly;
+    public IDisposable        AssemblyResolver;
 
     ILWeaverImportedType _networkRunner;
     ILWeaverImportedType _readWriteUtils;
@@ -2974,10 +3040,10 @@ namespace Fusion.CodeGen {
 
     public void Dispose() {
       CecilAssembly?.Dispose();
-
-      Modified = false;
-      Errors.Clear();
-      CecilAssembly    = null;
+      AssemblyResolver?.Dispose();
+      
+      Modified      = false;
+      CecilAssembly = null;
     }
 
     public TypeReference Import<T>() {
@@ -3002,7 +3068,7 @@ namespace Fusion.CodeGen {
 
   internal class ILWeaverAssemblyResolver : IAssemblyResolver {
     private List<string> _lookInDirectories;
-    private Dictionary<string, string> _assemblyNameToPath;
+    private Dictionary<string, List<string>> _assemblyNameToPath;
     private Dictionary<string, AssemblyDefinition> _resolvedAssemblies = new Dictionary<string, AssemblyDefinition>();
     private string _compiledAssemblyName;
     private ILWeaverLog _log;
@@ -3012,46 +3078,25 @@ namespace Fusion.CodeGen {
     public ILWeaverAssemblyResolver(ILWeaverLog log, string compiledAssemblyName, string[] references, string[] weavedAssemblies) {
       _log                  = log;
       _compiledAssemblyName = compiledAssemblyName;
-      _assemblyNameToPath   = new Dictionary<string, string>();
+      _assemblyNameToPath   = new Dictionary<string, List<string>>();
 
       foreach (var referencePath in references) {
         var assemblyName = Path.GetFileNameWithoutExtension(referencePath);
-        if (_assemblyNameToPath.TryGetValue(assemblyName, out var existingPath)) {
-          _log.Warn($"Assembly {assemblyName} (full path: {referencePath}) already referenced by {compiledAssemblyName} at {existingPath}");
-        } else {
-#if !FUSION_WEAVER_DISABLE_POST_PROCESSED_ASSEMBLIES_WORKAROUND
-          if (System.Array.IndexOf(weavedAssemblies, assemblyName) >= 0) {
-            // this assembly is expected to have been postprocessed, try to read it
-            var dir = Path.GetDirectoryName(referencePath);
-            dir = dir.Replace("\\", "/");
-
-            var fileName = Path.GetFileName(referencePath);
-            if (dir.Contains("Library/Bee/artifacts/")) {
-              var postProcessedPath = $"{dir}/post-processed/{fileName}";
-              if (File.Exists(postProcessedPath)) {
-                _log.Debug($"Adding {assemblyName}->{postProcessedPath} (PostProcessed)");
-                _assemblyNameToPath.Add(assemblyName, postProcessedPath);
-                continue;
-              }
-            } else if (dir.EndsWith("Library/ScriptAssemblies")) {
-              var postProcessedPath = $"Temp/{fileName}";
-              if (File.Exists(postProcessedPath)) {
-                _log.Debug($"Adding {assemblyName}->{postProcessedPath} (PostProcessed)");
-                _assemblyNameToPath.Add(assemblyName, postProcessedPath);
-                continue;
-              }
-            }
-          }
-#endif
-          _log.Debug($"Adding {assemblyName}->{referencePath}");
-          _assemblyNameToPath.Add(assemblyName, referencePath);
+        if (!_assemblyNameToPath.TryGetValue(assemblyName, out var existingPaths)) {
+          existingPaths = new List<string>();
+          _assemblyNameToPath.Add(assemblyName, existingPaths);
         }
+        _log.Debug($"Adding {assemblyName}->{referencePath}");
+        existingPaths.Add(referencePath);
       }
 
       _lookInDirectories = references.Select(x => Path.GetDirectoryName(x)).Distinct().ToList();
     }
 
     public void Dispose() {
+      foreach (var asm in _resolvedAssemblies.Values) {
+        asm.Dispose();
+      }
     }
 
     public AssemblyDefinition Resolve(AssemblyNameReference name) {
@@ -3084,15 +3129,20 @@ namespace Fusion.CodeGen {
     }
 
     private string GetAssemblyPath(AssemblyNameReference name) {
-      if (_assemblyNameToPath.TryGetValue(name.Name, out var path)) {
-        return path;
+      if (_assemblyNameToPath.TryGetValue(name.Name, out var paths)) {
+        _log.Assert(paths.Count > 0);
+        if (paths.Count > 1) {
+          _log.Warn($"Assembly {name.FullName} seems to be referenced multiple times: {string.Join(", ", paths)}. Using the first one.");
+          paths.RemoveRange(1, paths.Count - 1);
+        }
+        return paths[0];
       }
 
       // fallback for second-order references
       foreach (var parentDir in _lookInDirectories) {
         var fullPath = Path.Combine(parentDir, name.Name + ".dll");
         if (File.Exists(fullPath)) {
-          _assemblyNameToPath.Add(name.Name, fullPath);
+          _assemblyNameToPath.Add(name.Name, new List<string>() { fullPath });
           return fullPath;
         }
       }
@@ -3345,31 +3395,28 @@ namespace Fusion.CodeGen {
         }
 
         try {
-          ILWeaverAssembly asm;
-          ILWeaver weaver;
+          using (var asm = CreateWeaverAssembly(settings, log, compiledAssembly)) {
 
-          using (log.Scope("Resolving")) {
-            asm = CreateWeaverAssembly(settings, log, compiledAssembly);
-          }
+            ILWeaver weaver;
+            using (log.Scope("Init")) {
+              weaver = new ILWeaver(settings, log);
+            }
 
-          using (log.Scope("Init")) { 
-            weaver = new ILWeaver(settings, log);
-          }
+            weaver.Weave(asm);
 
-          weaver.Weave(asm);
+            if (asm.Modified) {
+              var pe  = new MemoryStream();
+              var pdb = new MemoryStream();
+              var writerParameters = new WriterParameters {
+                SymbolWriterProvider = new PortablePdbWriterProvider(),
+                SymbolStream         = pdb,
+                WriteSymbols         = true
+              };
 
-          if (asm.Modified) {
-            var pe = new MemoryStream();
-            var pdb = new MemoryStream();
-            var writerParameters = new WriterParameters {
-              SymbolWriterProvider = new PortablePdbWriterProvider(),
-              SymbolStream = pdb,
-              WriteSymbols = true
-            };
-
-            using (log.Scope("Writing")) {
-              asm.CecilAssembly.Write(pe, writerParameters);
-              resultAssembly = new InMemoryAssembly(pe.ToArray(), pdb.ToArray());
+              using (log.Scope("Writing")) {
+                asm.CecilAssembly.Write(pe, writerParameters);
+                resultAssembly = new InMemoryAssembly(pe.ToArray(), pdb.ToArray());
+              }
             }
           }
         } catch (Exception ex) {
@@ -3425,6 +3472,7 @@ namespace Fusion.CodeGen {
 
       return new ILWeaverAssembly() {
         CecilAssembly = assemblyDefinition,
+        AssemblyResolver = resolver
       };
     }
 
@@ -3605,8 +3653,6 @@ namespace Fusion.CodeGen {
 
   class ILWeaverBindings {
 
-    static ILWeaver _weaver;
-
     public static bool IsEditorAssemblyPath(string path) {
       return path.Contains("-Editor") || path.Contains(".Editor");
     }
@@ -3678,8 +3724,8 @@ namespace Fusion.CodeGen {
           AssembliesToWeave                  = projectConfig.AssembliesToWeave,
         };
 
-        _weaver = _weaver ?? new ILWeaver(settings, new ILWeaverLoggerUnityDebug());
-        Weave(_weaver, asm);
+        var weaver = new ILWeaver(settings, new ILWeaverLoggerUnityDebug());
+        Weave(weaver, asm);
       } catch (Exception ex) {
         UnityEngine.Debug.LogError(ex);
       }
@@ -6220,6 +6266,8 @@ namespace Fusion.CodeGen {
       var ctor = _module.ImportReference(type.Resolve().GetConstructors().Single(x => x.HasParameters));
       ctor.DeclaringType = type;
 
+      elementType = _module.ImportReference(elementType);
+
       var elementInfo = GetInfo(elementType);
       return NetworkTypeInfo.MakeCustom(type,
         wordCount: (member, declaringType) => GetCapacity(member, DefaultContainerCapacity) * elementInfo.GetMemberWordCount(member, declaringType),
@@ -6241,6 +6289,7 @@ namespace Fusion.CodeGen {
       var ctor = _module.ImportReference(type.Resolve().GetConstructors().Single(x => x.HasParameters));
       ctor.DeclaringType = type;
 
+      elementType = _module.ImportReference(elementType);
       var elementInfo = GetInfo(elementType);
 
       return NetworkTypeInfo.MakeCustom(type,
@@ -6265,6 +6314,9 @@ namespace Fusion.CodeGen {
       var ctor = _module.ImportReference(type.Resolve().GetConstructors().Single(x => x.HasParameters));
       ctor.DeclaringType = type;
 
+      keyType = _module.ImportReference(keyType);
+      valueType = _module.ImportReference(valueType);
+      
       var keyInfo = GetInfo(keyType);
       var valueInfo = GetInfo(valueType);
 
