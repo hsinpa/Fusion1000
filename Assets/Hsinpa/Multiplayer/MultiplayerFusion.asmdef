@@ -1,0 +1,16 @@
+{
+    "name": "MultiplayerFusion",
+    "rootNamespace": "",
+    "references": [
+        "GUID:a01b66e7c7e451043aa5b8f813798cc2"
+    ],
+    "includePlatforms": [],
+    "excludePlatforms": [],
+    "allowUnsafeCode": false,
+    "overrideReferences": false,
+    "precompiledReferences": [],
+    "autoReferenced": true,
+    "defineConstraints": [],
+    "versionDefines": [],
+    "noEngineReferences": false
+}
