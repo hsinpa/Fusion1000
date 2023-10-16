@@ -1,6 +1,10 @@
+using Hsinpa.Nettwork;
+using Hsinpa.Utility;
 using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
+using static Hsinpa.Utility.EventStatic;
+
 namespace Hsinpa.Golf
 {
     public class CompetitiveMode : IMultiplayerMode
@@ -11,12 +15,16 @@ namespace Hsinpa.Golf
         public GoldMultiStatic.MultiplayerStage multiplayerStage => _multiplayerStage;
         private GoldMultiStatic.MultiplayerStage _multiplayerStage = GoldMultiStatic.MultiplayerStage.Lobby;
 
-        public CompetitiveMode() { 
-        
+        private FusionEntryCode _fusionEntryCode;
+
+        public CompetitiveMode(FusionEntryCode fusionEntryCode) {
+            this._fusionEntryCode = fusionEntryCode;
         }
 
         public void GameStart() {
             _multiplayerStage = GoldMultiStatic.MultiplayerStage.InGame;
+
+            FusionEntryCode.Rpc_IntantBroadcast(this._fusionEntryCode.networkRunner, EventStatic.MultiplayerNetEvent.GameStartEvent, "");
         }
 
         public void BallHit() {
@@ -28,7 +36,7 @@ namespace Hsinpa.Golf
         }
 
         public void GameEnd() {
-
+            FusionEntryCode.Rpc_IntantBroadcast(this._fusionEntryCode.networkRunner, EventStatic.MultiplayerNetEvent.GameEndEvent, "");
         }
     }
 }

@@ -6,7 +6,7 @@ EditorBuildSettings:
   serializedVersion: 2
   m_Scenes:
   - enabled: 1
-    path: Assets/Hsinpa/Script/SampleScene.unity
-    guid: 9fc0d4010bbf28b4594072e72b8655ab
+    path: Assets/Hsinpa/GolfSpecificCode/GolfDemoScene.unity
+    guid: 85cb03321d7481441bb58e6e145f85cf
   m_configObjects:
     com.unity.input.settings: {fileID: 11400000, guid: dd93175f88756194ab055628ce90b521, type: 2}

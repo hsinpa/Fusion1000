@@ -6,12 +6,15 @@ using System.Collections;
 using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.SceneManagement;
-using Mono.Collections.Generic;
+using static Fusion.NetworkRunner;
 
 namespace Hsinpa.Nettwork
 {
     public class FusionEntryCode : SimulationBehaviour, IPlayerJoined, IPlayerLeft
-    {    
+    {
+        [SerializeField]
+        private NetworkSceneManagerDefault m_sceneManager;
+
         [SerializeField]
         private NetworkRunner m_networkRunner;
         public NetworkRunner networkRunner => m_networkRunner;
@@ -20,11 +23,11 @@ namespace Hsinpa.Nettwork
         public System.Action<PlayerRef> OnPlayerJoinEvent;
         public System.Action<PlayerRef> OnPlayerLeaveEvent;
 
-        public delegate void DataMessageDelegate(string event_id, string content);
+        public delegate void DataMessageDelegate(int event_id, string content);
         public static DataMessageDelegate OnDataMessage;
 
-        public PlayerRef self_player => Runner.LocalPlayer;
-        public ReadOnlyCollection<PlayerRef> players => new ReadOnlyCollection<PlayerRef>(Runner.ActivePlayers.ToArray());
+        public PlayerRef self_player => m_networkRunner.LocalPlayer;
+        public PlayerRef[] players => m_networkRunner.ActivePlayers.ToArray();
 
         private string player_id;
 
@@ -34,39 +37,41 @@ namespace Hsinpa.Nettwork
             var start_game = await m_networkRunner.StartGame(new StartGameArgs() {
                 GameMode = GameMode.Shared,
                 SessionName = p_room_id,
-                Scene = SceneManager.GetActiveScene().buildIndex,
-                SceneManager = gameObject.AddComponent<NetworkSceneManagerDefault>()
+                SceneManager = m_sceneManager
             });
 
             OnServerConnected?.Invoke();
         }
 
         public void Disconnect() {
-            m_networkRunner.Disconnect(Runner.LocalPlayer);
+            m_networkRunner.Disconnect(m_networkRunner.LocalPlayer);
         }
 
-        public void SpawnObject(NetBasePlayerBehaivor netBasePlayerBehaivor, Vector3 position, Quaternion rotation) {
-            var net_player = m_networkRunner.Spawn(netBasePlayerBehaivor, position, rotation);
-            net_player.SetUp(player_id);
+        public void SpawnObject(NetworkObject netBasePlayerBehaivor, Vector3 position, Quaternion rotation, OnBeforeSpawned spawn_callback) {
+            var net_player = m_networkRunner.Spawn(netBasePlayerBehaivor, position, rotation, onBeforeSpawned: spawn_callback);
+        }
+
+        public void Despawn(NetworkObject networkObject) {
+            m_networkRunner.Despawn(networkObject, false);
         }
 
         [Rpc]
-        public static void Rpc_IntantMessage(NetworkRunner runner, [RpcTarget] PlayerRef player, string event_id, string content) {
+        public static void Rpc_SingleMessage(NetworkRunner runner, [RpcTarget] PlayerRef player, int event_id, string content = "") {
             if (runner.LocalPlayer != player)
                 OnDataMessage?.Invoke(event_id, content);
         }
 
         [Rpc(sources: RpcSources.InputAuthority, targets: RpcTargets.StateAuthority, InvokeLocal = false)]
-        public static void Rpc_IntantMessage(NetworkRunner runner, string event_id, string content) {
+        public static void Rpc_IntantBroadcast(NetworkRunner runner, int event_id, string content) {
             OnDataMessage?.Invoke(event_id, content);
         }
 
         public void PlayerJoined(PlayerRef player) {
-            if (player != Runner.LocalPlayer) OnPlayerJoinEvent?.Invoke(player);
+            if (player != m_networkRunner.LocalPlayer) OnPlayerJoinEvent?.Invoke(player);
         }
 
         public void PlayerLeft(PlayerRef player) {
-            if (player != Runner.LocalPlayer) OnPlayerJoinEvent?.Invoke(player);
+            if (player != m_networkRunner.LocalPlayer) OnPlayerLeaveEvent?.Invoke(player);
         }
     }
 }

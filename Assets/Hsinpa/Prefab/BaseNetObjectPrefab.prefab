@@ -46,6 +46,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: b8c4d317f310e2246b64ff3666910077, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  _interpolationDataSource: 0
 --- !u!114 &5129828039894707499
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -68,9 +69,9 @@ MonoBehaviour:
     RawGuidValue: bb74169a05842d547983f2d63b57deee
   NestedObjects: []
   NetworkedBehaviours:
-  - {fileID: 4374641012661732758}
-  SimulationBehaviours:
   - {fileID: 8435981566576887412}
+  - {fileID: 4374641012661732758}
+  SimulationBehaviours: []
 --- !u!114 &4374641012661732758
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -85,7 +86,7 @@ MonoBehaviour:
   m_EditorClassIdentifier: 
   _interpolationDataSource: 0
   InterpolationSpace: 0
-  InterpolationTarget: {fileID: 0}
+  InterpolationTarget: {fileID: 7785195126719580723}
   InterpolateErrorCorrection: 1
   InterpolatedErrorCorrectionSettings:
     MinRate: 3.3

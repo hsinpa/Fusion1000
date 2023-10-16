@@ -482,7 +482,7 @@ Transform:
   m_LocalEulerAnglesHint: {x: 0, y: 0, z: 0}
 --- !u!95 &3348291948860277115
 Animator:
-  serializedVersion: 4
+  serializedVersion: 5
   m_ObjectHideFlags: 0
   m_CorrespondingSourceObject: {fileID: 0}
   m_PrefabInstance: {fileID: 0}
@@ -499,7 +499,8 @@ Animator:
   m_WarningMessage: 
   m_HasTransformHierarchy: 1
   m_AllowConstantClipSamplingOptimization: 1
-  m_KeepAnimatorControllerStateOnDisable: 0
+  m_KeepAnimatorStateOnDisable: 0
+  m_WriteDefaultValuesOnDisable: 0
 --- !u!114 &3406408279376960621
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -1327,6 +1328,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: adaf37fd201575546ba8472bb991ddc2, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  _interpolationDataSource: 0
   m_characterController: {fileID: 4303773991741113167}
   m_playerInput: {fileID: 4416926081852918493}
   m_animator: {fileID: 3348291948860277115}
@@ -1391,10 +1393,10 @@ MonoBehaviour:
     RawGuidValue: a34930cc4b07c424892dee19768c0c69
   NestedObjects: []
   NetworkedBehaviours:
+  - {fileID: 6554591453604198784}
   - {fileID: 6114843781429472930}
   - {fileID: 3406408279376960621}
-  SimulationBehaviours:
-  - {fileID: 6554591453604198784}
+  SimulationBehaviours: []
 --- !u!1 &4523139366846529165
 GameObject:
   m_ObjectHideFlags: 0

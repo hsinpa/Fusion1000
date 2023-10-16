@@ -141,9 +141,9 @@ MonoBehaviour:
     RawGuidValue: fbd149c325ffc9c4abbbdbe7d2c1da60
   NestedObjects: []
   NetworkedBehaviours:
-  - {fileID: 393867274}
-  SimulationBehaviours:
   - {fileID: 6938381219039781573}
+  - {fileID: 393867274}
+  SimulationBehaviours: []
 --- !u!114 &6938381219039781573
 MonoBehaviour:
   m_ObjectHideFlags: 0
@@ -156,8 +156,13 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: adaf37fd201575546ba8472bb991ddc2, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  _interpolationDataSource: 0
   m_characterController: {fileID: 393867275}
-  m_speed: 25
+  m_playerInput: {fileID: 0}
+  m_animator: {fileID: 0}
+  m_characterCtrl: {fileID: 0}
+  m_skinMesh: {fileID: 0}
+  m_netObject: {fileID: 0}
 --- !u!143 &393867275
 CharacterController:
   m_ObjectHideFlags: 0

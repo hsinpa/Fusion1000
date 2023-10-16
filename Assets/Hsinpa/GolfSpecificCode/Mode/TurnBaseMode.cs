@@ -5,7 +5,7 @@ using UnityEngine;
 
 namespace Hsinpa.Golf
 {
-    public class SequenceMode : IMultiplayerMode
+    public class TurnbaseMode : IMultiplayerMode
     {
         public GoldMultiStatic.MultiplayerMode multiplayerMode => throw new System.NotImplementedException();
 

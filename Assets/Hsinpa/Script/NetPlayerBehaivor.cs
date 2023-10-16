@@ -7,7 +7,7 @@ using UnityEngine.InputSystem;
 using Hsinpa.UnityController;
 
 namespace Hsinpa.Nettwork {
-    public class NetPlayerBehaivor : SimulationBehaviour
+    public class NetPlayerBehaivor : NetworkBehaviour
     {
         [SerializeField]
         private CustomPersonController m_characterController;
