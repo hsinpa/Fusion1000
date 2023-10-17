@@ -12,27 +12,15 @@ namespace Hsinpa.Golf
         public GoldMultiStatic.MultiplayerStage multiplayerStage => throw new System.NotImplementedException();
 
         public void BallHit() {
-            throw new System.NotImplementedException();
         }
 
         public void BallStop() {
-            throw new System.NotImplementedException();
         }
 
-        public void GameEnd() {
-            throw new System.NotImplementedException();
+        public void GameEnd(bool send_net_event = false) {
         }
 
-        public void GameStart() {
-            throw new System.NotImplementedException();
-        }
-
-        public void OnPlayerEnter(string player_id) {
-            throw new System.NotImplementedException();
-        }
-
-        public void OnPlayerLeave(string player_id) {
-            throw new System.NotImplementedException();
+        public void GameStart(bool send_net_event = false) {
         }
     }
 }

@@ -21,10 +21,11 @@ namespace Hsinpa.Golf
             this._fusionEntryCode = fusionEntryCode;
         }
 
-        public void GameStart() {
+        public void GameStart(bool send_net_event = false) {
             _multiplayerStage = GoldMultiStatic.MultiplayerStage.InGame;
 
-            FusionEntryCode.Rpc_IntantBroadcast(this._fusionEntryCode.networkRunner, EventStatic.MultiplayerNetEvent.GameStartEvent, "");
+            if (send_net_event)
+                FusionEntryCode.Rpc_IntantBroadcast(this._fusionEntryCode.networkRunner, EventStatic.MultiplayerNetEvent.GameStartEvent, "");
         }
 
         public void BallHit() {
@@ -35,8 +36,9 @@ namespace Hsinpa.Golf
 
         }
 
-        public void GameEnd() {
-            FusionEntryCode.Rpc_IntantBroadcast(this._fusionEntryCode.networkRunner, EventStatic.MultiplayerNetEvent.GameEndEvent, "");
+        public void GameEnd(bool send_net_event = false) {
+            if (send_net_event)
+                FusionEntryCode.Rpc_IntantBroadcast(this._fusionEntryCode.networkRunner, EventStatic.MultiplayerNetEvent.GameEndEvent, "");
         }
     }
 }

@@ -9,12 +9,12 @@ namespace Hsinpa.Golf {
         MultiplayerMode multiplayerMode { get; }
         MultiplayerStage multiplayerStage { get; }
 
-        void GameStart();
+        void GameStart(bool send_net_event = false);
 
         void BallHit();
         void BallStop();
 
-        void GameEnd();
+        void GameEnd(bool send_net_event = false);
 
     }
 }

@@ -52,7 +52,7 @@ namespace Hsinpa.Nettwork
         }
 
         public void Despawn(NetworkObject networkObject) {
-            m_networkRunner.Despawn(networkObject, false);
+            Runner.Despawn(networkObject, false);
         }
 
         [Rpc]

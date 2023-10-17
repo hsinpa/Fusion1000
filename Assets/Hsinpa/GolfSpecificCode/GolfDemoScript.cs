@@ -69,7 +69,7 @@ namespace Hsinpa.Demo
             Debug.Log("OnPlayerJoinEvent " + playerRef.PlayerId);
         }
 
-        private void OnPlayerLeaveEvent(PlayerRef playerRef) {
+        private async void OnPlayerLeaveEvent(PlayerRef playerRef) {
             Debug.Log("OnPlayerLeaveEvent " + playerRef.PlayerId);
 
             if (playerRefDict.TryGetValue(playerRef.PlayerId, out NetBasePlayerBehaivor behaviorObject)) {
@@ -78,7 +78,10 @@ namespace Hsinpa.Demo
                 playerRefDict.Remove(playerRef.PlayerId);
                 playerIDDict.Remove(behaviorObject.player_id);
 
-                fusionEntryCode.Despawn(behaviorObject.GetComponent<NetworkObject>());
+                behaviorObject.gameObject.SetActive(false);
+                _ = Hsinpa.Utility.UtilityFunc.DoDelayWork(0.5f, () => {
+                    fusionEntryCode.Despawn(behaviorObject.GetComponent<NetworkObject>());
+                });
             }
         }
 
@@ -111,7 +114,7 @@ namespace Hsinpa.Demo
             if (id == MultiplayerInGameEvent.UIEventGameStartEvent) {
                 Debug.Log("MultiplayerInGameEvent.UIEventGameStartEvent");
 
-                _multiplayerMode.GameStart();
+                _multiplayerMode.GameStart(send_net_event: true);
             }
         }
 
